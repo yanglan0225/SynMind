@@ -75,7 +75,7 @@ Additional packages used across the repository include:
 The main training script is:
 
 ```bash
-python trains/mian_sem.py --model_name exp01 --batch_size 48 --epochs 60 --use_prior
+python trains/main_sem.py --model_name exp01 --batch_size 48 --epochs 60 --use_prior
 ```
 
 
