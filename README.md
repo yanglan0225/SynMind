@@ -10,8 +10,11 @@
   <a href="https://www.python.org/downloads/release/python-3100/">
     <img src="https://img.shields.io/badge/Python-3.10%2B-blue.svg" alt="Python 3.10+" />
   </a>
-<a href="https://pan.baidu.com/s/1HjK66tr45kKOdluGwAJGng">
+<a href="https://pan.baidu.com/s/1S9mIYiZEvsdETBSaGk9F6g?pwd=1234">
   <img src="https://img.shields.io/badge/Images-Baidu%20Netdisk-2932E1.svg" alt="images" />
+</a>
+<a href="https://pan.baidu.com/s/1dul47cXXJW-oQwmDFUUOHA?pwd=1234">
+  <img src="https://img.shields.io/badge/Human%20Study-Baidu%20Netdisk-2932E1.svg" alt="human study" />
 </a>
   <a href="https://opensource.org/licenses/MIT">
     <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License" />
@@ -75,7 +78,7 @@ Additional packages used across the repository include:
 The main training script is:
 
 ```bash
-python trains/main_sem.py --model_name exp01 --batch_size 48 --epochs 60 --use_prior
+python trains/mian_sem.py --model_name exp01 --batch_size 48 --epochs 60 --use_prior
 ```
 
 
