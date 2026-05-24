@@ -142,4 +142,20 @@ python enhanced_recon.py
 
 ## Citation
 
-If you use this code in a paper or project, consider adding your paper title, authors, and citation block here once the manuscript or preprint is ready.
+
+If you use this code in a paper or project, please consider citing our work:
+
+**SynMind: Reducing Semantic Hallucination in fMRI-Based Image Reconstruction**  
+Lan Yang, Minghan Yang, Ke Li, Honggang Zhang, Kaiyue Pang, Yi-Zhe Song  
+*IEEE Transactions on Multimedia*, 2026.
+
+```bibtex
+@article{yang2026synmind,
+  title   = {SynMind: Reducing Semantic Hallucination in fMRI-Based Image Reconstruction},
+  author  = {Yang, Lan and Yang, Minghan and Li, Ke and Zhang, Honggang and Pang, Kaiyue and Song, Yi-Zhe},
+  journal = {IEEE Transactions on Multimedia},
+  year    = {2026},
+  publisher = {IEEE}
+}
+```
+
