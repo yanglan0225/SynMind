@@ -60,7 +60,7 @@ for subj in [2,5,7]:
     prior_out = pred
     print(prior_out.shape)
 
-    # labels = np.load("/home/ymh/adaptive_SemBrain/new_log/map/01_test_cocoid_map.npy")
+    # labels = np.load("/home/ymh/adaptive_SynMind/new_log/map/01_test_cocoid_map.npy")
     with torch.no_grad(), torch.cuda.amp.autocast(dtype=torch.float16):
         for i in tqdm(range(0,982)):
             samples = utils_recon.unclip_recon(prior_out[i].unsqueeze(0),

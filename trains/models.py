@@ -14,6 +14,8 @@ import utils
 from diffusers.models.vae import Decoder
 
 class sem_brainMLP(nn.Module):
+    """SSE semantic head for predicting text-token embeddings from shared fMRI latents."""
+
     def __init__(self,hidden_dim=4096):
         super(sem_brainMLP, self).__init__()
         
@@ -53,6 +55,13 @@ class sem_brainMLP(nn.Module):
         
 
 class BrainNetwork(nn.Module):
+    """Subject-shared encoder containing the paper's SSV and SSE branches.
+
+    The visual branch maps shared fMRI latents to CLIP/unCLIP visual features
+    (SSV), while the optional text branch maps the same latents to semantic
+    text-token features (SSE).
+    """
+
     def __init__(self, h=4096, in_dim=15724, out_dim=768, seq_len=2, n_blocks=4, drop=.15, clip_size=768, blurry_recon=True, clip_scale=1,text_out_dim = 1280*77, use_text = True):
         super().__init__()
         self.seq_len = seq_len
@@ -174,6 +183,9 @@ class BrainNetwork(nn.Module):
             b = (self.bupsampler(b), b_aux)
         
         return backbone, c, b, text_backbone
+
+SubjectSharedEncoder = BrainNetwork
+SubjectSharedSemanticHead = sem_brainMLP
     
 class Clipper(torch.nn.Module):
     def __init__(self, clip_variant, clamp_embs=False, norm_embs=False,
@@ -285,7 +297,8 @@ from dalle2_pytorch.train_configs import DiffusionPriorNetworkConfig
 from dalle2_pytorch.dalle2_pytorch import RotaryEmbedding, CausalTransformer, SinusoidalPosEmb, MLP, Rearrange, repeat, rearrange, prob_mask_like, LayerNorm, RelPosBias, Attention, FeedForward
 
 class BrainDiffusionPrior(DiffusionPrior):
-    """ 
+    """SAR diffusion wrapper used for visual and semantic latent denoising.
+
     Differences from original:
     - Allow for passing of generators to torch random functions
     - Option to include the voxel2clip model and pass voxels into forward method
@@ -443,7 +456,11 @@ class BrainDiffusionPrior(DiffusionPrior):
         # undo the scaling so we can directly use it for real mse loss and reconstruction
         return loss, pred
 
+SemanticAwareRenderPrior = BrainDiffusionPrior
+
 class PriorNetwork(nn.Module):
+    """Visual diffusion prior network used by SAR to denoise visual latents."""
+
     def __init__(
         self,
         dim,
@@ -879,6 +896,8 @@ class GNet8_Encoder():
     
 
 class sem_PriorNetwork(nn.Module):
+    """Semantic diffusion prior network used by SAR to denoise text latents."""
+
     def __init__(
         self,
         dim,

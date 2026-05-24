@@ -111,6 +111,8 @@ class SubjRidgeRegression(torch.nn.Module):
         out = self.linears[subj_idx](x).unsqueeze(1)
         return out
 
+SubjectWiseMapper = SubjRidgeRegression
+
 
 def save_ckpt(tag,outdir,epoch, model, optimizer, lr_scheduler, losses, test_losses, lrs):
     ckpt_path = outdir+f'/{tag}.pth'
@@ -172,12 +174,14 @@ def main(args):
     
     model = MindEyeModule()
 
+    # SWM: subject-wise mapper from subject-specific fMRI voxels to a shared latent space.
     model.ridge = SubjRidgeRegression([12682], out_features=args.hidden_dim).to(args.device)
 
 
     #model.text_ridge = SubjRidgeRegression([15724,14278,13039,12682], out_features=args.hidden_dim).to(args.device)
 
     from models import BrainNetwork,sem_brainMLP
+    # SSE + SSV: shared semantic and visual encoders over the SWM latent.
     model.backbone = BrainNetwork(h=args.hidden_dim, in_dim=args.hidden_dim, seq_len=1, n_blocks=args.n_blocks,
                             clip_size=1664, out_dim=1664*256, text_out_dim = 77*768,
                             blurry_recon=args.blurry_recon, clip_scale=args.clip_scale, use_text=False).to(args.device)
@@ -206,6 +210,7 @@ def main(args):
             )
         print_cpu_memory_usage("After Prior Network Init")
 
+        # SAR: visual diffusion prior for rendering image/unCLIP latents.
         model.diffusion_prior = BrainDiffusionPrior(
             net=prior_network,
             image_embed_dim=out_dim,
@@ -233,6 +238,7 @@ def main(args):
             )
         print_cpu_memory_usage("After Text Prior Network Init")
 
+        # SAR: semantic diffusion prior for rendering text-token latents.
         model.text_diffusion_prior = BrainDiffusionPrior(
             net=text_prior_network,
             image_embed_dim=text_out_dim,

@@ -54,7 +54,7 @@ def decode_and_save_images(subj):
     print(f"\n--- Processing Subject {subj} ---")
     pred = torch.load(f"/home/yl/ssd_new/ymh/pami25/results/mix_v1/test_subj01.pth")
     prior_out = pred["vae_results"]
-    labels = np.load("/home/ymh/adaptive_SemBrain/new_log/map/01_test_cocoid_map.npy")
+    labels = np.load("/home/ymh/adaptive_SynMind/new_log/map/01_test_cocoid_map.npy")
     
     # --- Define paths for the current subject ---
     output_dir_subj = os.path.join(output_base_dir, f'subj{subj}')

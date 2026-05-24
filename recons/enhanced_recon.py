@@ -57,7 +57,7 @@ def load_images_from_folder(folder, labels):
     
     return torch.stack(images)  
 
-labels = np.load("/home/ymh/adaptive_SemBrain/new_log/map/01_test_cocoid_map.npy")
+labels = np.load("/home/ymh/adaptive_SynMind/new_log/map/01_test_cocoid_map.npy")
 
 config = OmegaConf.load("generative_models/configs/unclip6.yaml")
 config = OmegaConf.to_container(config, resolve=True)

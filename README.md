@@ -10,11 +10,11 @@
   <a href="https://www.python.org/downloads/release/python-3100/">
     <img src="https://img.shields.io/badge/Python-3.10%2B-blue.svg" alt="Python 3.10+" />
   </a>
-<a href="https://pan.baidu.com/s/1S9mIYiZEvsdETBSaGk9F6g?pwd=1234">
-  <img src="https://img.shields.io/badge/Images-Baidu%20Netdisk-2932E1.svg" alt="images" />
+<a href="https://huggingface.co/datasets/YanmHa/SynMind">
+  <img src="https://img.shields.io/badge/Images-HuggingFace-FFD21E.svg" alt="images" />
 </a>
-<a href="https://pan.baidu.com/s/1dul47cXXJW-oQwmDFUUOHA?pwd=1234">
-  <img src="https://img.shields.io/badge/Human%20Study-Baidu%20Netdisk-2932E1.svg" alt="human study" />
+<a href="https://huggingface.co/datasets/YanmHa/SynMind">
+  <img src="https://img.shields.io/badge/Human%20Study-HuggingFace-FFD21E.svg" alt="human study" />
 </a>
   <a href="https://opensource.org/licenses/MIT">
     <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License" />
@@ -27,7 +27,7 @@
   
 </div>
 
-SemBrain is a codebase for semantic fMRI-to-image reconstruction on the Natural Scenes Dataset (NSD). The repository contains training, latent prediction, blurry reconstruction, unCLIP-based image generation, and text-guided enhancement code for turning brain activity into image and text representations.
+SynMind is a codebase for semantic fMRI-to-image reconstruction on the Natural Scenes Dataset (NSD). The repository contains training, latent prediction, blurry reconstruction, unCLIP-based image generation, and text-guided enhancement code for turning brain activity into image and text representations.
 ## 📑 Overview
 
 The current pipeline is organized into several stages:
@@ -46,6 +46,18 @@ In practice, the code combines:
 - VAE-based blurry reconstruction
 - diffusion-based image enhancement
 
+## Paper-to-Code Module Mapping
+
+The implementation keeps several historical engineering names for checkpoint and script compatibility. The table below maps the paper terminology to the current code paths, classes, and call sites.
+
+| Paper module | Description | Current code implementation |
+|---|---|---|
+| `MimeVis` | Generates human-like, multi-granularity semantic descriptions for visual stimuli. The generated descriptions provide semantic supervision for the text/semantic branch. | Implemented in `trains/MimeVis.py`. `Qwen2VL` wraps the VLM inference, `prompts` defines the two-round semantic description process, and `batch_call_with_local_file(...)` exports generated captions. |
+| `SWM` Subject-Wise Mapper | Projects subject-specific fMRI signals with different voxel dimensions into a unified shared latent space. | `SubjRidgeRegression` in `trains/main_sem.py` and `trains/inference.py`, instantiated as `model.ridge`. |
+| `SSE` Subject-Shared Semantic Encoder | Maps shared fMRI latents into the semantic/text embedding space, aligning brain signals with MimeVis-derived semantic supervision. | Semantic branch in `BrainNetwork.forward(...)`: `text_mixer_blocks1` and `text_backbone_linear`, returned as `text_backbone`; inference can also use `sem_brainMLP` for text embedding prediction. |
+| `SSV` Subject-Shared Visual Encoder | Maps shared fMRI latents into visual CLIP / unCLIP feature space for visual reconstruction. | Visual branch in `BrainNetwork.forward(...)`: `mixer_blocks1`, `mixer_blocks2`, `backbone_linear`, and `clip_proj`, returned as `backbone` and `clip_voxels`. |
+| `SAR` Semantic-Aware Render | Uses predicted visual and semantic features to produce the final image reconstructions. | Visual rendering uses `BrainDiffusionPrior + PriorNetwork`; semantic rendering uses `BrainDiffusionPrior + sem_PriorNetwork`; generated latents are decoded by `recons/recon_I2I.py`, `recons/recon_TextEhanced.py`, and `recons/enhanced_recon.py`. |
+
 ## 📂 Expected Data and Assets
 
 Before running the project on a new machine, update paths inside the scripts or refactor them into configuration arguments.
@@ -55,8 +67,8 @@ Before running the project on a new machine, update paths inside the scripts or 
 A practical starting environment looks like this:
 
 ```bash
-conda create -n sembrain python=3.10 -y
-conda activate sembrain
+conda create -n synmind python=3.10 -y
+conda activate synmind
 
 pip install torch torchvision torchaudio 
 pip install diffusers accelerate h5py psutil dalle2-pytorch
