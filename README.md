@@ -10,10 +10,10 @@
   <a href="https://www.python.org/downloads/release/python-3100/">
     <img src="https://img.shields.io/badge/Python-3.10%2B-blue.svg" alt="Python 3.10+" />
   </a>
-<a href="https://huggingface.co/datasets/YanmHa/SynMind">
-  <img src="https://img.shields.io/badge/Images-HuggingFace-FFD21E.svg" alt="images" />
+<a href="https://huggingface.co/datasets/YanmHa/SynMind/tree/main/images">
+  <img src="https://img.shields.io/badge/Images-HuggingFace-FFD21E.svg" alt="Reconstructed Results" />
 </a>
-<a href="https://huggingface.co/datasets/YanmHa/SynMind">
+<a href="https://huggingface.co/datasets/YanmHa/SynMind/tree/main/human_study">
   <img src="https://img.shields.io/badge/Human%20Study-HuggingFace-FFD21E.svg" alt="human study" />
 </a>
   <a href="https://opensource.org/licenses/MIT">
