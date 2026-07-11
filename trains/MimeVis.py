@@ -1,3 +1,4 @@
+import argparse
 import os 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 from qwen_vl_utils import process_vision_info
@@ -11,6 +12,61 @@ from torch.utils.data import DataLoader, Dataset
 import json
 
 from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+
+
+DEFAULT_NSD_SUBJECTS = ("01", "02", "05", "07")
+DEFAULT_CAPTION_LENGTHS = (30, 45, 60, 75)
+
+
+def parse_subjects(subjects):
+    parsed_subjects = []
+    for subject in subjects:
+        for part in str(subject).split(","):
+            subject_id = part.strip()
+            if subject_id.lower().startswith("subj"):
+                subject_id = subject_id[4:]
+            if not subject_id.isdigit():
+                raise ValueError(f"Invalid subject id: {subject}")
+            parsed_subjects.append(subject_id.zfill(2))
+
+    return parsed_subjects
+
+
+def parse_caption_lengths(lengths):
+    parsed_lengths = []
+    for length in lengths:
+        for part in str(length).split(","):
+            length_value = part.strip()
+            if not length_value.isdigit() or int(length_value) <= 0:
+                raise ValueError(f"Invalid caption length: {length}")
+            parsed_lengths.append(int(length_value))
+
+    return parsed_lengths
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Generate MimeVis semantic captions for NSD subjects."
+    )
+    parser.add_argument(
+        "--subjects",
+        nargs="+",
+        default=list(DEFAULT_NSD_SUBJECTS),
+        help="NSD subject ids to process. Defaults to the paper subjects: 01 02 05 07.",
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=16,
+        help="Batch size for Qwen2-VL caption generation.",
+    )
+    parser.add_argument(
+        "--caption_lengths",
+        nargs="+",
+        default=list(DEFAULT_CAPTION_LENGTHS),
+        help="MimeVis caption length limits. Defaults to the paper levels: 30 45 60 75.",
+    )
+    return parser.parse_args()
 
 
 
@@ -51,7 +107,7 @@ class Qwen2VL:
                                                 {"type": "text", "text": query}]}]
                 messages.append(msg)
         else:
-            messages = [messages[i] + [{"role": "user", "content": query.replace("***", kwargs['captions'][i][0])}] for i in range(len(messages))]
+            messages = [messages[i] + [{"role": "user", "content": query.replace("***", kwargs['captions'][i])}] for i in range(len(messages))]
         
         return messages
         
@@ -95,17 +151,39 @@ class Qwen2VL:
         return response, history
 
 
-def batch_call_with_local_file(dataloader, model, prompts, img_dir, caption_save_pth, generate_img = False):
+def normalize_coco_caption(caption):
+    if isinstance(caption, list):
+        return caption[0]
+    return str(caption)
+
+
+def save_caption_csv(caption_save_pth, processed_cocoids, coco_caption_texts, fine_captions, caption_length, legacy_save_pth=None):
+    data = {
+        'cocoid': processed_cocoids,
+        'coco_cap': coco_caption_texts,
+        f'v{caption_length}': fine_captions,
+        'fine_cap': fine_captions,
+    }
+
+    df = pd.DataFrame(data)
+    df.to_csv(caption_save_pth)
+    if legacy_save_pth is not None:
+        df.to_csv(legacy_save_pth)
+
+
+def batch_call_with_local_file(dataloader, model, prompts, img_dir, caption_save_pth, caption_length, legacy_save_pth=None, generate_img = False):
     coco_captions = json.load(open('/home/yl/ssd_new/Dataset/fMRI/cvpr25_data/coco_captions.json', 'r'))
     fine_captions = []
     processed_cocoids = []
+    coco_caption_texts = []
     since = time.time()
 
     for i, cocoids in tqdm(enumerate(dataloader), total=len(dataloader)):
 
         response, history = model.chat(query=prompts[0], imgs = [f"{img_dir}/{str(cocoid.item())}.jpg" for cocoid in cocoids])
+        batch_coco_captions = [normalize_coco_caption(coco_captions[str(cocoid.item())]) for cocoid in cocoids]
         for prompt in prompts[1:]:
-            response, history = model.chat(query=prompt, history=history, captions=[coco_captions[str(cocoid.item())] for cocoid in cocoids])
+            response, history = model.chat(query=prompt, history=history, captions=batch_coco_captions)
 
             # if generate_img:
             #     import caption2img
@@ -117,33 +195,25 @@ def batch_call_with_local_file(dataloader, model, prompts, img_dir, caption_save
             #         a = 1
             
         processed_cocoids.extend(cocoids.cpu().tolist())
+        coco_caption_texts.extend(batch_coco_captions)
         fine_captions.extend(response)
         cost_time_min = (time.time() - since ) // 60
         cost_time_sec = (time.time() - since ) % 60
         print(f'{cost_time_min} min {cost_time_sec} sec')
             
         if len(fine_captions) % 100 == 0:
-            data = {'cocoid': processed_cocoids,
-                    # 'coarse_cap': coarse_captions,
-                    'fine_cap': fine_captions,}
-
-            df = pd.DataFrame(data)
-            df.to_csv(caption_save_pth)
+            save_caption_csv(caption_save_pth, processed_cocoids, coco_caption_texts, fine_captions, caption_length, legacy_save_pth)
     
-    data = {'cocoid': processed_cocoids,
-            'fine_cap': fine_captions,}
-
-    df = pd.DataFrame(data)
-    df.to_csv(caption_save_pth)
+    save_caption_csv(caption_save_pth, processed_cocoids, coco_caption_texts, fine_captions, caption_length, legacy_save_pth)
 
 
 if __name__ == '__main__':
-    prompts = ["What visual semantics do humans perceive from this visual stimulus in 3 seconds?",
-                """Expand the basic caption *** into a detailed one using the previously discussed semantics. Aim for clarity and precision in your description, suitable for a text-to-image model input, and keep it under 77 words"""]
+    args = parse_args()
+    subjects = parse_subjects(args.subjects)
+    caption_lengths = parse_caption_lengths(args.caption_lengths)
+    first_round_prompt = "What visual semantics do humans perceive from this visual stimulus in 3 seconds?"
     
-    for subj in ['01', '02', '03', '04']:
-        # , '05', '06', '07', '08' '01', '02', '03', '04'
-
+    for subj in subjects:
         print('-'*10, 'Processing subj {}'.format(subj))
         img_dir = '/home/yl/ssd_new/Dataset/fMRI/cvpr25_data/preprocessed_img/subj{}'.format(subj)
         subj_info = pd.read_csv(os.path.join('/home/yl/ssd_new/Dataset/fMRI/cvpr25_data/', 'subj{}_data_info.csv'.format(subj)))
@@ -153,7 +223,7 @@ if __name__ == '__main__':
         cocoids.sort()
         
         dataset = BatchDataset(cocoids)
-        dataloader = torch.utils.data.DataLoader(dataset, batch_size=16)
+        dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size)
 
         model = Qwen2VL("/home/yl/ssd_new/pretrain_weights/qwen2_vl_2b_instruct")
 
@@ -166,5 +236,13 @@ if __name__ == '__main__':
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
        
-        caption_save_pth = '/home/yl/ssd_new/Dataset/fMRI/cvpr25_data/subj_target/subj{}/qwen2b_2runs_1cap_ext.csv'.format(subj)
-        batch_call_with_local_file(dataloader, model, prompts, img_dir, caption_save_pth, generate_img = True)
+        for caption_length in caption_lengths:
+            prompts = [
+                first_round_prompt,
+                f"""Expand the basic caption *** into a detailed one using the previously discussed semantics. Aim for clarity and precision in your description, suitable for a text-to-image model input, and keep it under {caption_length} words""",
+            ]
+            caption_save_pth = '/home/yl/ssd_new/Dataset/fMRI/cvpr25_data/subj_target/subj{}/qwen2b_2runs_1cap_v{}.csv'.format(subj, caption_length)
+            legacy_save_pth = None
+            if caption_length == 75:
+                legacy_save_pth = '/home/yl/ssd_new/Dataset/fMRI/cvpr25_data/subj_target/subj{}/qwen2b_2runs_1cap_ext.csv'.format(subj)
+            batch_call_with_local_file(dataloader, model, prompts, img_dir, caption_save_pth, caption_length, legacy_save_pth, generate_img = True)

@@ -22,6 +22,31 @@ print("PID of this process =",os.getpid())
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print("device:",device)
 
+DEFAULT_NSD_SUBJECTS = (1, 2, 5, 7)
+NSD_SUBJECT_VOXELS = {
+    1: 15724,
+    2: 14278,
+    5: 13039,
+    7: 12682,
+}
+
+
+def parse_subjects(subjects):
+    parsed_subjects = []
+    for subject in subjects:
+        for part in str(subject).split(","):
+            subject_id = part.strip()
+            if subject_id.lower().startswith("subj"):
+                subject_id = subject_id[4:]
+            if not subject_id.isdigit():
+                raise ValueError(f"Invalid subject id: {subject}")
+            subject_num = int(subject_id)
+            if subject_num not in NSD_SUBJECT_VOXELS:
+                raise ValueError(f"Unsupported NSD subject: {subject_num}")
+            parsed_subjects.append(subject_num)
+    return parsed_subjects
+
+
 def print_cpu_memory_usage(tag=""):
     """Print the current process CPU memory usage."""
     process = psutil.Process(os.getpid())
@@ -44,6 +69,12 @@ def parse_argument():
     parser.add_argument(
         "--batch_size", type=int, default=256,
         help="Batch size can be increased by 10x if only training retreival submodule and not diffusion prior",
+    )
+    parser.add_argument(
+        "--subjects",
+        nargs="+",
+        default=[str(subject) for subject in DEFAULT_NSD_SUBJECTS],
+        help="NSD subjects to export. Defaults to the paper subjects: 1 2 5 7.",
     )
     parser.add_argument(
         "--mixup_pct",type=float,default=0.0,
@@ -129,12 +160,9 @@ def save_ckpt(tag,outdir,epoch, model, optimizer, lr_scheduler, losses, test_los
 
 
 def load_ckpt(tag, model, outdir, load_lr=False, load_optimizer=False, load_epoch=False, strict=False): 
-    print(f"\n---loading {outdir}/v1_30_last.pth ckpt---\n")
-    # Note: the original code loaded 'last.pth', but the function receives a 'tag' argument.
-    # Using the 'tag' argument makes the function more flexible.
     checkpoint_path = f"{outdir}/{tag}.pth"
     print(f"Loading from: {checkpoint_path}")
-    checkpoint = torch.load("/root/autodl-tmp/train_logs/mix_mindeye_v1/subj07/last_9.pth", map_location='cpu')
+    checkpoint = torch.load(checkpoint_path, map_location='cpu')
     
     state_dict = checkpoint['model_state_dict']
 
@@ -170,12 +198,14 @@ def main(args):
     outdir = os.path.abspath(f'/root/autodl-tmp/train_logs/mix_mindeye_v1/{args.model_name}')
     if not os.path.exists(outdir) and args.ckpt_saving:
         os.makedirs(outdir,exist_ok=True)
+    subjects = parse_subjects(args.subjects)
+    subject_to_model_idx = {subject: idx for idx, subject in enumerate(subjects)}
     num_iterations_per_epoch = 108000 / args.batch_size # 108000 is the number of training samples in NSD
     
     model = MindEyeModule()
 
     # SWM: subject-wise mapper from subject-specific fMRI voxels to a shared latent space.
-    model.ridge = SubjRidgeRegression([12682], out_features=args.hidden_dim).to(args.device)
+    model.ridge = SubjRidgeRegression([NSD_SUBJECT_VOXELS[subject] for subject in subjects], out_features=args.hidden_dim).to(args.device)
 
 
     #model.text_ridge = SubjRidgeRegression([15724,14278,13039,12682], out_features=args.hidden_dim).to(args.device)
@@ -184,9 +214,7 @@ def main(args):
     # SSE + SSV: shared semantic and visual encoders over the SWM latent.
     model.backbone = BrainNetwork(h=args.hidden_dim, in_dim=args.hidden_dim, seq_len=1, n_blocks=args.n_blocks,
                             clip_size=1664, out_dim=1664*256, text_out_dim = 77*768,
-                            blurry_recon=args.blurry_recon, clip_scale=args.clip_scale, use_text=False).to(args.device)
-    
-    model.text_bacbone = sem_brainMLP(hidden_dim=args.hidden_dim)
+                            blurry_recon=args.blurry_recon, clip_scale=args.clip_scale, use_text=True).to(args.device)
     
     print_cpu_memory_usage("After Backbone Init")
     
@@ -317,74 +345,55 @@ def main(args):
     l1 = nn.L1Loss()
     soft_loss_temps = utils.cosine_anneal(0.004, 0.0075, args.epochs - int(args.mixup_pct * args.epochs))
 
-    results = []
-    vae_results = []
-    text_results = []
-    text_results2 = []
-    text_emb_results = []
-    
     for epoch in progress_bar:
         model.eval()
         if (epoch+1) % 1 == 0:
-            loss = 0.
-            with torch.no_grad(): 
-                train_loader = None
-                test_loader = get_dataloader(mode='test', batch_size=args.batch_size, subjects=[7],clip_length=args.length)
-                for test_i, (voxel0, text_clip_data, subj_idx,class_labels, image_enc, cnx_embeds, cnx_aug_embeds, clip_target,_) in enumerate(test_loader):  
-                    # all test samples should be loaded per batch such that test_i should never exceed 0
-                    text_clip_data = text_clip_data.to(args.device).float().view(text_clip_data.shape[0], 77, 768)
-                    image_enc=image_enc.to(args.device).float()
-                    cnx_embeds=cnx_embeds.to(args.device).float()
-                    cnx_aug_embeds=cnx_aug_embeds.to(args.device).float()
-                    clip_target = clip_target.to(args.device).float().view(clip_target.shape[0], 256, 1664)
+            for export_subject in subjects:
+                results = []
+                vae_results = []
+                text_results = []
+                subject_model_idx = subject_to_model_idx[export_subject]
+                with torch.no_grad(): 
+                    train_loader = None
+                    test_loader = get_dataloader(mode='test', batch_size=args.batch_size, subjects=[export_subject],clip_length=args.length)
+                    for test_i, (voxel0, text_clip_data, subj_idx, image_enc, cnx_embeds, cnx_aug_embeds, clip_target) in enumerate(test_loader):  
+                        # all test samples should be loaded per batch such that test_i should never exceed 0
+                        text_clip_data = text_clip_data.to(args.device).float().view(text_clip_data.shape[0], 77, 768)
+                        image_enc=image_enc.to(args.device).float()
+                        cnx_embeds=cnx_embeds.to(args.device).float()
+                        cnx_aug_embeds=cnx_aug_embeds.to(args.device).float()
+                        clip_target = clip_target.to(args.device).float().view(clip_target.shape[0], 256, 1664)
 
-                    voxel_ridge_list = []
-                    text_voxel_ridge_list = []
-                    for s_d,subj in zip(voxel0,subj_idx):
-                        subj_shared = model.ridge(s_d.unsqueeze(0).to(args.device), 0)
-                        #subj_shared_text = model.text_ridge(s_d.unsqueeze(0).to(args.device), 3)
-                        voxel_ridge_list.append(subj_shared)
-                        #text_voxel_ridge_list.append(subj_shared_text)
+                        voxel_ridge_list = []
+                        for s_d in voxel0:
+                            subj_shared = model.ridge(s_d.unsqueeze(0).to(args.device), subject_model_idx)
+                            voxel_ridge_list.append(subj_shared)
 
-                    voxel_ridge = torch.cat(voxel_ridge_list, dim=0)
-                    #text_voxel_ridge = torch.cat(text_voxel_ridge_list, dim=0)
+                        voxel_ridge = torch.cat(voxel_ridge_list, dim=0)
 
-                    backbone, clip_voxels, blurry_image_enc_, text_backbone,text_emb = model.backbone(voxel_ridge)
-                    text_backbone = model.text_bacbone(voxel_ridge)
-                    text_backbone = text_backbone.view(text_backbone.shape[0], 77, 768)
-                    b,_ = blurry_image_enc_
-                    vae_results.append(b)
-                    text_emb_results.append(text_emb)
+                        backbone, clip_voxels, blurry_image_enc_, text_backbone = model.backbone(voxel_ridge)
+                        text_backbone = text_backbone.view(text_backbone.shape[0], 77, 768)
+                        b,_ = blurry_image_enc_
+                        vae_results.append(b)
 
-                    if args.clip_scale>0:
-                        clip_voxels_norm = nn.functional.normalize(clip_voxels.flatten(1), dim=-1)
-                        clip_target_norm = nn.functional.normalize(clip_target.flatten(1), dim=-1)
-                        text_backbone_norm = nn.functional.normalize(text_backbone.flatten(1), dim=-1)
-                        text_clip_data_norm = nn.functional.normalize(text_clip_data.flatten(1), dim=-1)
+                        if args.use_prior:
+                            text_prior_out = model.text_diffusion_prior.p_sample_loop(text_backbone.shape, 
+                                            text_cond = dict(text_embed = text_backbone), 
+                                            cond_scale = 1., timesteps = 50)                       
+                            prior_out = model.diffusion_prior.p_sample_loop(backbone.shape, 
+                                            text_cond = dict(text_embed = backbone), 
+                                            cond_scale = 1., timesteps = 20)
+                            results.append(prior_out)
+                            text_results.append(text_prior_out)
 
-                    
-                    # for some evals, only doing a subset of the samples per batch because of computational cost
-                    random_samps = np.random.choice(np.arange(len(voxel0)), size=len(voxel0)//5, replace=False)
-                    
-                    if args.use_prior:
-                        text_prior_out = model.text_diffusion_prior.p_sample_loop(text_backbone.shape, 
-                                        text_cond = dict(text_embed = text_backbone), 
-                                        cond_scale = 1., timesteps = 50)                       
-                        prior_out = model.diffusion_prior.p_sample_loop(backbone.shape, 
-                                        text_cond = dict(text_embed = backbone), 
-                                        cond_scale = 1., timesteps = 20)
-                        results.append(prior_out)
-                        text_results2.append(text_prior_out)
-        results = torch.cat(results, dim=0)
-        vae_results = torch.cat(vae_results, dim=0)
-        #text_emb_results = torch.cat(text_emb_results, dim=0)
-        text_results2 = torch.cat(text_results2, dim=0)
-        torch.save({
-            'results': results,
-            'vae_results': vae_results,
-            'text_results': text_results,
-            #'text_emb_results': text_emb_results,
-        }, f'/root/autodl-tmp/train_logs/mix_mindeye_v1/subj07/test_subj07_10e.pth')
+                results = torch.cat(results, dim=0)
+                vae_results = torch.cat(vae_results, dim=0)
+                text_results = torch.cat(text_results, dim=0)
+                torch.save({
+                    'results': results,
+                    'vae_results': vae_results,
+                    'text_results': text_results,
+                }, f'{outdir}/test_subj{export_subject:02d}_10e.pth')
 
 if __name__=='__main__':
     args = parse_argument()

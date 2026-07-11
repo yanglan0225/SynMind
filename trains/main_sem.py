@@ -22,6 +22,38 @@ print("PID of this process =",os.getpid())
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print("device:",device)
 
+DEFAULT_NSD_SUBJECTS = (1, 2, 5, 7)
+NSD_SUBJECT_VOXELS = {
+    1: 15724,
+    2: 14278,
+    5: 13039,
+    7: 12682,
+}
+
+
+def parse_subjects(subjects):
+    parsed_subjects = []
+    for subject in subjects:
+        for part in str(subject).split(","):
+            subject_id = part.strip()
+            if subject_id.lower().startswith("subj"):
+                subject_id = subject_id[4:]
+            if not subject_id.isdigit():
+                raise ValueError(f"Invalid subject id: {subject}")
+            subject_num = int(subject_id)
+            if subject_num not in NSD_SUBJECT_VOXELS:
+                raise ValueError(f"Unsupported NSD subject: {subject_num}")
+            parsed_subjects.append(subject_num)
+    return parsed_subjects
+
+
+def map_subject_indices(batch_subject_indices, loader_subjects, subject_to_model_idx):
+    return [
+        subject_to_model_idx[loader_subjects[int(subject_idx)]]
+        for subject_idx in batch_subject_indices.detach().cpu().tolist()
+    ]
+
+
 def print_cpu_memory_usage(tag=""):
     """Print the current process CPU memory usage."""
     process = psutil.Process(os.getpid())
@@ -46,7 +78,19 @@ def parse_argument():
         help="Batch size can be increased by 10x if only training retreival submodule and not diffusion prior",
     )
     parser.add_argument(
-        "--mixup_pct",type=float,default=0.0,
+        "--subjects",
+        nargs="+",
+        default=[str(subject) for subject in DEFAULT_NSD_SUBJECTS],
+        help="NSD subjects used for training. Defaults to the paper subjects: 1 2 5 7.",
+    )
+    parser.add_argument(
+        "--test_subjects",
+        nargs="+",
+        default=None,
+        help="NSD subjects used for validation. Defaults to the same subjects as --subjects.",
+    )
+    parser.add_argument(
+        "--mixup_pct",type=float,default=0.33,
         help="proportion of way through training when to switch from BiMixCo to SoftCLIP",
     )
     parser.add_argument(
@@ -54,15 +98,15 @@ def parse_argument():
         help="whether to output blurry reconstructions",
     )
     parser.add_argument(
-        "--blur_scale",type=float,default=.5,
-        help="multiply loss from blurry recons by this number",
+        "--blur_scale",type=float,default=.33,
+        help="multiply VisionAssist loss by this number",
     )
     parser.add_argument(
-        "--clip_scale",type=float,default=1.,
-        help="multiply contrastive loss by this number",
+        "--clip_scale",type=float,default=.1,
+        help="multiply SoftCLIP loss by this number",
     )
     parser.add_argument(
-        "--prior_scale",type=float,default=30,
+        "--prior_scale",type=float,default=1.,
         help="multiply diffusion prior loss by this",
     )
     parser.add_argument(
@@ -76,7 +120,7 @@ def parse_argument():
         "--hidden_dim",type=int,default=4096,
     )
     parser.add_argument(
-        "--lr_scheduler_type",type=str,default='cycle',choices=['cycle','linear'],
+        "--lr_scheduler_type",type=str,default='cosine',choices=['cosine','cycle','linear'],
     )
     parser.add_argument(
         "--ckpt_saving",action=argparse.BooleanOptionalAction,default=True,
@@ -265,13 +309,19 @@ def main(args):
     outdir = os.path.abspath(f'/root/autodl-tmp/train_logs/mix_mindeye_v1/{args.model_name}')
     if not os.path.exists(outdir) and args.ckpt_saving:
         os.makedirs(outdir,exist_ok=True)
+    subjects = parse_subjects(args.subjects)
+    test_subjects = parse_subjects(args.test_subjects) if args.test_subjects else subjects
+    missing_test_subjects = sorted(set(test_subjects) - set(subjects))
+    if missing_test_subjects:
+        raise ValueError(f"--test_subjects must be included in --subjects: {missing_test_subjects}")
+    subject_to_model_idx = {subject: idx for idx, subject in enumerate(subjects)}
     num_iterations_per_epoch = 54000 / args.batch_size # 108000 is the number of training samples in NSD
     
     model = MindEyeModule()
     print_cpu_memory_usage("Init")
 
     # SWM: subject-wise mapper from subject-specific fMRI voxels to a shared latent space.
-    model.ridge = SubjRidgeRegression([15724,14278,13039,12682], out_features=args.hidden_dim).to(args.device)
+    model.ridge = SubjRidgeRegression([NSD_SUBJECT_VOXELS[subject] for subject in subjects], out_features=args.hidden_dim).to(args.device)
     #model.text_ridge = SubjRidgeRegression([15724,14278,13039,12682], out_features=args.hidden_dim).to(args.device)
 
     from models import BrainNetwork,sem_brainMLP
@@ -367,9 +417,16 @@ def main(args):
             {'params': [p for n, p in model.text_diffusion_prior.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': 1e-2},
             {'params': [p for n, p in model.text_diffusion_prior.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0},
         ])
-    optimizer = torch.optim.AdamW(opt_grouped_parameters, lr=args.max_lr)
+    optimizer = torch.optim.Adam(opt_grouped_parameters, lr=args.max_lr)
 
-    if args.lr_scheduler_type == 'linear':
+    if args.lr_scheduler_type == 'cosine':
+        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=int(np.floor(args.epochs*num_iterations_per_epoch)),
+            eta_min=args.max_lr / 1000,
+        )
+        print("Using CosineAnnealingLR with max_lr:", args.max_lr)
+    elif args.lr_scheduler_type == 'linear':
         lr_scheduler = torch.optim.lr_scheduler.LinearLR(
             optimizer,
             total_iters=int(np.floor(args.epochs*num_iterations_per_epoch)),
@@ -437,7 +494,7 @@ def main(args):
         train_loader = get_dataloader(
             mode='train', 
             batch_size=args.batch_size, 
-            subjects=[1,2,5,7],
+            subjects=subjects,
             clip_length=args.length,
             data_part = current_part,
         )       
@@ -477,7 +534,7 @@ def main(args):
             if True:
                 optimizer.zero_grad()
                 loss=0.
-                voxel0, text_clip_data, subj_idx,class_labels, image_enc, cnx_embeds, cnx_aug_embeds, clip_target, clip_emb= data
+                voxel0, text_clip_data, subj_idx, image_enc, cnx_embeds, cnx_aug_embeds, clip_target = data
                 
                 text_clip_data = text_clip_data.to(args.device).float().view(text_clip_data.shape[0], 77, 768)
                 image_enc=image_enc.to(args.device).float().view(-1,4,28,28)
@@ -488,18 +545,10 @@ def main(args):
 
                 assert not torch.any(torch.isnan(clip_target))
 
-                if epoch < int(args.mixup_pct * args.epochs):
-                    voxel0, perm, betas, select = utils.mixco(voxel0)
-                    perm_list = [perm_iters[f"subj0{s}_iter{train_i}"].detach().to(device) for s in subj_list]
-                    perm = torch.cat(perm_list, dim=0)
-                    betas_list = [betas_iters[f"subj0{s}_iter{train_i}"].detach().to(device) for s in subj_list]
-                    betas = torch.cat(betas_list, dim=0)
-                    select_list = [select_iters[f"subj0{s}_iter{train_i}"].detach().to(device) for s in subj_list]
-                    select = torch.cat(select_list, dim=0)
-
                 voxel_ridge_list = []
                 text_voxel_ridge_list = []
-                for s_d,subj in zip(voxel0,subj_idx):
+                train_subject_indices = map_subject_indices(subj_idx, subjects, subject_to_model_idx)
+                for s_d,subj in zip(voxel0,train_subject_indices):
                     subj_shared = model.ridge(s_d.unsqueeze(0).to(args.device), subj)
                     #subj_shared_text = model.text_ridge(s_d.unsqueeze(0).to(args.device), subj)
                     voxel_ridge_list.append(subj_shared)
@@ -507,6 +556,9 @@ def main(args):
 
                 voxel_ridge = torch.cat(voxel_ridge_list, dim=0)
                 #text_voxel_ridge = torch.cat(text_voxel_ridge_list, dim=0)
+
+                if epoch < int(args.mixup_pct * args.epochs):
+                    voxel_ridge, perm, betas, select = utils.mixco(voxel_ridge)
 
                 backbone, clip_voxels, blurry_image_enc_, text_backbone= model.backbone(voxel_ridge)
                 #text_backbone = model.text_bacbone(voxel_ridge)
@@ -541,6 +593,12 @@ def main(args):
                             clip_target_norm,
                             temp=.006,
                             perm=perm, betas=betas, select=select)
+                        text_loss_clip = utils.mixco_nce(
+                            text_backbone_norm,
+                            text_clip_data_norm,
+                            temp=.006,
+                            perm=perm, betas=betas, select=select,
+                            bidirectional=False)
                     else:
                         epoch_temp = soft_loss_temps[epoch-int(args.mixup_pct*args.epochs)]
                         loss_clip = utils.soft_clip_loss(
@@ -613,8 +671,8 @@ def main(args):
             loss = 0.
             with torch.no_grad(), torch.cuda.amp.autocast(dtype=args.data_type): 
                 train_loader = None
-                test_loader = get_dataloader(mode='test', batch_size=args.batch_size, subjects=[1],clip_length=args.length)
-                for test_i, (voxel0, text_clip_data, subj_idx,class_labels, image_enc, cnx_embeds, cnx_aug_embeds, clip_target,clip_emb) in enumerate(test_loader):  
+                test_loader = get_dataloader(mode='test', batch_size=args.batch_size, subjects=test_subjects,clip_length=args.length)
+                for test_i, (voxel0, text_clip_data, subj_idx, image_enc, cnx_embeds, cnx_aug_embeds, clip_target) in enumerate(test_loader):  
                     # all test samples should be loaded per batch such that test_i should never exceed 0
                     text_clip_data = text_clip_data.to(args.device).float().view(text_clip_data.shape[0], 77, 768)
                     image_enc=image_enc.to(args.device).float()
@@ -625,7 +683,8 @@ def main(args):
 
                     voxel_ridge_list = []
                     text_voxel_ridge_list = []
-                    for s_d,subj in zip(voxel0,subj_idx):
+                    test_subject_indices = map_subject_indices(subj_idx, test_subjects, subject_to_model_idx)
+                    for s_d,subj in zip(voxel0,test_subject_indices):
                         subj_shared = model.ridge(s_d.unsqueeze(0).to(args.device), subj)
                         #subj_shared_text = model.text_ridge(s_d.unsqueeze(0).to(args.device), subj)
                         voxel_ridge_list.append(subj_shared)
