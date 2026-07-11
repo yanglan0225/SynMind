@@ -53,7 +53,7 @@ out = diffusion_engine.conditioner(batch)
 vector_suffix = out["vector"].to(device)
 print("vector_suffix", vector_suffix.shape)
 # Load hdf5 data for betas
-for subj in [2,5,7]:
+for subj in [1,2,5,7]:
     pred = torch.load(f"/home/yl/ssd_new/ymh/pami25/weights/vi/test_subj0{subj}_10e.pth")
     pred = pred["results"]
     print(pred.shape)

@@ -52,7 +52,7 @@ def decode_and_save_images(subj):
     Loads latents for a subject, decodes them back to images, and saves them.
     """
     print(f"\n--- Processing Subject {subj} ---")
-    pred = torch.load(f"/home/yl/ssd_new/ymh/pami25/results/mix_v1/test_subj01.pth")
+    pred = torch.load(f"/home/yl/ssd_new/ymh/pami25/results/mix_v1/test_subj{subj}.pth")
     prior_out = pred["vae_results"]
     labels = np.load("/home/ymh/adaptive_SynMind/new_log/map/01_test_cocoid_map.npy")
     
@@ -67,7 +67,7 @@ def decode_and_save_images(subj):
 
     # --- Decode each latent and save the image ---
     count = 0
-    for i in tqdm(range(1000)):
+    for i in tqdm(range(min(num_images_to_check_per_subject, len(prior_out)))):
             
         # Reverse the scaling factor before decoding
         latents_tensor = prior_out[i] / SCALING_FACTOR
@@ -87,14 +87,14 @@ def decode_and_save_images(subj):
         
         # Convert to PIL Image and save
         reconstructed_image = Image.fromarray(image)
-        save_path = os.path.join("/home/yl/ssd_new/ymh/pami25/results/mix_v1/blurry/subj01", f"{labels[i]}.jpg")
+        save_path = os.path.join(output_dir_subj, f"{labels[i]}.jpg")
         reconstructed_image.save(save_path)
     print(f"Finished processing for subject {subj}. Check results in: {output_dir_subj}")
 
 
 # --- Main execution block ---
 if __name__ == '__main__':
-    subjects = ['01'] # The subjects you processed
+    subjects = ['01', '02', '05', '07'] # The subjects reported in the paper
     
     for subj_num in subjects:
         decode_and_save_images(subj_num)

@@ -129,12 +129,14 @@ def denoiser(x, sigma, c): return base_engine.denoiser(base_engine.model, x, sig
 
 
 all_enhancedrecons = None
-for subj in [1]:
+for subj in [1,2,5,7]:
     all_recons = load_images_from_folder(f"/home/ymh/LG_feature_aligin/codes/train/fuse_v1/images", labels)
 
     all_predcaptions = torch.load(f"/home/yl/ssd_new/ymh/pami25/results/subj0{subj}_pred/all_predcaptions.pt")
     all_recons = transforms.Resize((768,768))(all_recons).float()
     os.makedirs(f"/home/yl/ssd_new/ymh/pami25/results/subj0{subj}_pred/I2I_E", exist_ok=True)
+    output_dir = f"/home/yl/ssd_new/ymh/image-aligned-experiment-data/images/mindAliner/subj0{subj}_1E"
+    os.makedirs(output_dir, exist_ok=True)
     for img_idx in tqdm(range(len(all_recons))):
         with torch.no_grad(), torch.cuda.amp.autocast(dtype=torch.float16), base_engine.ema_scope():
             base_engine.sampler.num_steps = 25
@@ -177,4 +179,4 @@ for subj in [1]:
             samples = samples
             img = transforms.Resize((224,224))(samples).float()
             img =   transforms.ToPILImage()(samples[0])
-            img.save(f"/home/yl/ssd_new/ymh/image-aligned-experiment-data/images/mindAliner/subj02_1E/{labels[img_idx]}.jpg")
+            img.save(f"{output_dir}/{labels[img_idx]}.jpg")
